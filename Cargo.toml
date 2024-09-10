@@ -1,0 +1,15 @@
+[package]
+name = "csrf_killer"
+author = "TinajaStyle"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+reqwest = {version = "0.12.7", features = ["json", "multipart", "cookies"]}
+clap = { version = "4.5.16", features = ["cargo", "derive"] }
+tokio = { version = "1.39.3", features = ["full"] }
+regex = "1.10.6"
+serde_json = "1.0.127"
+log = "0.4.22"
+env_logger = "0.11.5"
+indicatif = "0.17.8"
