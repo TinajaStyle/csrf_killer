@@ -85,7 +85,8 @@ impl Settings {
 
 pub struct Progress {
     pub pb: ProgressBar,
-    pub no: AtomicU32,
+    pub no_req: AtomicU32,
+    pub no_err: AtomicU32,
 }
 
 pub enum Payload {

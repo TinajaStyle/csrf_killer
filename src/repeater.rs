@@ -4,6 +4,7 @@ use super::util::structs::{
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::{Client, Response};
+use std::error::Error;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::Duration;
@@ -23,15 +24,20 @@ pub async fn create_poll(settings: Arc<Settings>) {
 
     let progress = Arc::new(Progress {
         pb: ProgressBar::new(total_req),
-        no: AtomicU32::new(1),
+        no_req: AtomicU32::new(1),
+        no_err: AtomicU32::new(1),
     });
 
     progress.pb.set_style(
-            ProgressStyle::with_template("{spinner:.green} {percent}% [{bar:50.cyan/blue}] {pos:.cyan}/{len:.blue} [ETA: {eta_precise}]")
-            .expect("Error in load template to progress bar")
-            .progress_chars("=>-")
-        );
+        ProgressStyle::with_template(
+            "{spinner:.green} {percent}% [{bar:50.cyan/blue}] \
+            {pos:.cyan}/{len:.blue} [Errors: {msg:.red}] [ETA: {eta_precise}]",
+        )
+        .expect("Error in load template to progress bar")
+        .progress_chars("=>-"),
+    );
     progress.pb.enable_steady_tick(Duration::from_millis(100));
+    progress.pb.set_message("0");
 
     let mut workers = Vec::new();
     for _ in 0..settings.concurrence {
@@ -60,11 +66,8 @@ async fn worker(payload: Arc<Payload>, settings: Arc<Settings>, progress: Arc<Pr
             };
             match line {
                 Some(ln) => {
-                    let no = progress
-                        .no
-                        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     let response = repeater(Arc::clone(&settings), client.clone(), &ln).await;
-                    log_response(response, &settings.filters, ln, no, &progress.pb).await;
+                    log_response(response, &settings.filters, ln, Arc::clone(&progress)).await;
                     progress.pb.inc(1);
                     std::thread::sleep(Duration::from_millis(5));
                 }
@@ -75,10 +78,14 @@ async fn worker(payload: Arc<Payload>, settings: Arc<Settings>, progress: Arc<Pr
     }
 }
 
-async fn repeater(settings: Arc<Settings>, client: Client, line: &str) -> Response {
+async fn repeater(
+    settings: Arc<Settings>,
+    client: Client,
+    line: &str,
+) -> Result<Response, Box<dyn Error + Send + Sync>> {
     let mut request_parts = RequestParts::new();
 
-    if let Some(tokens) = csrf_request(client.clone(), &settings.csrf).await {
+    if let Some(tokens) = csrf_request(client.clone(), &settings.csrf).await? {
         request_parts.extend(tokens);
     } else {
         exit_with_err("Not found a value for the provided regexes", None);
@@ -87,10 +94,13 @@ async fn repeater(settings: Arc<Settings>, client: Client, line: &str) -> Respon
     target_request(client, &settings.target, request_parts, line).await
 }
 
-async fn csrf_request(client: Client, csrf: &Csrf) -> Option<RequestParts> {
-    let response = client.get(&csrf.url).send().await.unwrap();
-    let text = response.text().await.unwrap();
-    filter_tokens(csrf, &text)
+async fn csrf_request(
+    client: Client,
+    csrf: &Csrf,
+) -> Result<Option<RequestParts>, Box<dyn Error + Send + Sync>> {
+    let response = client.get(&csrf.url).send().await?;
+    let text = response.text().await?;
+    Ok(filter_tokens(csrf, &text))
 }
 
 async fn target_request(
@@ -98,7 +108,7 @@ async fn target_request(
     target: &Target,
     mut request_parts: RequestParts,
     line: &str,
-) -> Response {
+) -> Result<Response, Box<dyn Error + Send + Sync>> {
     let url = &target.url.replace("FUZZ", line);
     let mut builder = match target.method.as_str() {
         "get" => client.get(url),
@@ -137,5 +147,5 @@ async fn target_request(
         }
     }
 
-    builder.send().await.unwrap()
+    Ok(builder.send().await?)
 }

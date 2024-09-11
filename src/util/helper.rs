@@ -1,5 +1,4 @@
-use super::structs::{Csrf, Data, Filters, Payload, RequestPart, RequestParts, Settings};
-use indicatif::ProgressBar;
+use super::structs::{Csrf, Data, Filters, Payload, Progress, RequestPart, RequestParts, Settings};
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::redirect::Policy;
@@ -171,30 +170,43 @@ pub fn filter_tokens(csrf: &Csrf, text: &str) -> Option<RequestParts> {
 }
 
 pub async fn log_response(
-    response: Response,
+    response: Result<Response, Box<dyn Error + Send + Sync>>,
     filters: &Filters,
     payload: String,
-    no: u32,
-    pb: &ProgressBar,
+    progress: Arc<Progress>,
 ) {
-    let status_code = response.status().as_u16();
-    let content_length = response.content_length().unwrap_or(0);
-    let text = response.text().await.unwrap_or(String::new());
-    let words = text.split_whitespace().count() as u64;
-    let chars = text.chars().count() as u64;
+    let no = progress
+        .no_req
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
-    let fl = filters.status.map_or(false, |f| f == status_code)
-        || filters.length.map_or(false, |f| f == content_length)
-        || filters.words.map_or(false, |f| f == words)
-        || filters.chars.map_or(false, |f| f == chars);
+    match response {
+        Ok(response) => {
+            let status_code = response.status().as_u16();
+            let content_length = response.content_length().unwrap_or(0);
+            let text = response.text().await.unwrap_or(String::new());
+            let words = text.split_whitespace().count() as u64;
+            let chars = text.chars().count() as u64;
 
-    if !fl {
-        pb.suspend(|| {
-            println!(
-                "{:<10} {:<15} {:<15} {:<15} {:<15} {:<15}",
-                no, status_code, content_length, words, chars, payload
-            );
-        });
+            let fl = filters.status.map_or(false, |f| f == status_code)
+                || filters.length.map_or(false, |f| f == content_length)
+                || filters.words.map_or(false, |f| f == words)
+                || filters.chars.map_or(false, |f| f == chars);
+
+            if !fl {
+                progress.pb.suspend(|| {
+                    println!(
+                        "{:<10} {:<15} {:<15} {:<15} {:<15} {:<15}",
+                        no, status_code, content_length, words, chars, payload
+                    );
+                });
+            }
+        }
+        Err(_) => {
+            let no = progress
+                .no_err
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            progress.pb.set_message(no.to_string());
+        }
     }
 }
 
