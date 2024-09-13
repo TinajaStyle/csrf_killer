@@ -1,11 +1,13 @@
-use super::structs::{Csrf, Data, Filters, Payload, Progress, RequestPart, RequestParts, Settings};
+use super::structs::{
+    Csrf, Data, ErrorEnum, Filters, KillerError, Payload, Progress, RequestPart, RequestParts,
+    Settings,
+};
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
 use reqwest::redirect::Policy;
 use reqwest::{Client, Proxy, Response};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::error::Error;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,63 +15,66 @@ use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 
-pub fn exit_with_err(msg: &str, err: Option<&dyn Error>) -> ! {
-    let full_msg = match err {
-        Some(err) => format!("{}: {}", msg, err),
-        None => msg.to_string(),
-    };
-
-    log::error!("{}", full_msg);
+pub fn exit_with_err(err: KillerError) -> ! {
+    log::error!("{}", err);
     std::process::exit(1);
 }
 
-pub fn validate_tokens(tokens: &Vec<String>) -> HashMap<String, (String, Regex)> {
+pub fn validate_tokens(
+    tokens: &Vec<String>,
+) -> Result<HashMap<String, (String, Regex)>, KillerError> {
     let mut token_hashmap = HashMap::new();
 
     for token in tokens {
         let vt: Vec<&str> = token.split("==").collect();
         if vt.len() != 3 {
-            exit_with_err(
-                &format!("Invalid token struct: {}, must be == separate", token),
-                None,
-            );
+            return Err(KillerError {
+                detail: Box::leak(
+                    format!("Invalid token struct: {}, must be == separate", token)
+                        .into_boxed_str(),
+                ),
+            });
         }
         token_hashmap.insert(
             vt.first().unwrap().to_string(),
             (
+                // unwrap the unwrap
                 vt.get(1).unwrap().to_string(),
                 Regex::new(vt.get(2).unwrap()).unwrap(),
             ),
         );
     }
-    token_hashmap
+    Ok(token_hashmap)
 }
 
-pub fn validate_headers(headers: &Vec<String>) -> HeaderMap {
+pub fn validate_headers(headers: &Vec<String>) -> Result<HeaderMap, KillerError> {
     let mut header_map = HeaderMap::new();
 
     for header in headers {
         let pair: Vec<&str> = header.split(':').collect();
         if pair.len() != 2 {
-            exit_with_err(
-                format!("Invalid header: {}, must be : separate", header).as_str(),
-                None,
-            );
+            return Err(KillerError {
+                detail: Box::leak(
+                    format!("Invalid header: {}, must be : separate", header).into_boxed_str(),
+                ),
+            });
         }
         header_map.insert(
             HeaderName::from_str(pair.first().unwrap()).unwrap(),
             HeaderValue::from_str(pair.get(1).unwrap()).unwrap(),
         );
     }
-    header_map
+    Ok(header_map)
 }
 
-pub fn validate_form(data: &str) -> Option<Data> {
+pub fn validate_form(data: &str) -> Result<Option<Data>, KillerError> {
     let re = Regex::new(r"^([^=&]+=[^=&]+)(?:&[^=&]+=[^=&]+)*$").unwrap();
 
     if !re.is_match(data) {
-        exit_with_err("Invalid format of form data", None);
-    };
+        return Err(KillerError {
+            detail: "Invalid format of form data",
+        });
+    }
 
     let spliting = data.split('&');
 
@@ -83,16 +88,13 @@ pub fn validate_form(data: &str) -> Option<Data> {
         );
     }
 
-    if form_hashmap.is_empty() {
-        return None;
-    }
-    Some(Data::Form(form_hashmap))
+    Ok(Some(Data::Form(form_hashmap)))
 }
 
-pub async fn get_lines(path: &str) -> (Arc<Payload>, u64) {
-    let file = File::open(path)
-        .await
-        .unwrap_or_else(|err| exit_with_err("Can't open the wordlist", Some(&err)));
+pub async fn get_lines(path: &str) -> Result<(Arc<Payload>, u64), KillerError> {
+    let file = File::open(path).await.map_err(|_| KillerError {
+        detail: "Cant open the wordlist",
+    })?;
 
     let mut reader = BufReader::new(file).lines();
     let mut count = 0_u64;
@@ -100,17 +102,17 @@ pub async fn get_lines(path: &str) -> (Arc<Payload>, u64) {
         count += 1
     }
 
-    let file = File::open(path)
-        .await
-        .unwrap_or_else(|err| exit_with_err("Can't open the wordlist", Some(&err)));
+    let file = File::open(path).await.map_err(|_| KillerError {
+        detail: "Cant open the wordlist",
+    })?;
 
-    (
+    Ok((
         Arc::new(Payload::Lines(Mutex::new(BufReader::new(file).lines()))),
         count,
-    )
+    ))
 }
 
-pub fn create_client(settings: Arc<Settings>) -> Client {
+pub fn create_client(settings: Arc<Settings>) -> Result<Client, KillerError> {
     let mut builder = reqwest::Client::builder();
 
     if settings.options.store_cookies {
@@ -126,18 +128,20 @@ pub fn create_client(settings: Arc<Settings>) -> Client {
 
     if let Some(proxy) = &settings.options.proxy {
         builder = builder
-            .proxy(
-                Proxy::http(proxy).unwrap_or_else(|err| exit_with_err("Invalid proxy", Some(&err))),
-            )
-            .proxy(
-                Proxy::https(proxy)
-                    .unwrap_or_else(|err| exit_with_err("Invalid proxy", Some(&err))),
-            )
+            .proxy(Proxy::http(proxy).map_err(|_| KillerError {
+                detail: "Invalid proxy",
+            })?)
+            .proxy(Proxy::https(proxy).map_err(|_| KillerError {
+                detail: "Invalid proxy",
+            })?)
     }
+
+    // add comments
+    builder = builder.danger_accept_invalid_certs(true);
 
     builder = builder.timeout(Duration::from_secs_f32(settings.options.timeout));
 
-    builder.build().expect("Faild to build Client")
+    Ok(builder.build().expect("Faild to build Client"))
 }
 
 pub fn filter_tokens(csrf: &Csrf, text: &str) -> Option<RequestParts> {
@@ -162,6 +166,7 @@ pub fn filter_tokens(csrf: &Csrf, text: &str) -> Option<RequestParts> {
                 let cookie = format!("{}={}", name, matched);
                 RequestPart::Cookie(cookie)
             }
+            // KillerError?
             _ => panic!("Invalid token position"),
         };
         tokens.add(token);
@@ -170,11 +175,11 @@ pub fn filter_tokens(csrf: &Csrf, text: &str) -> Option<RequestParts> {
 }
 
 pub async fn log_response(
-    response: Result<Response, Box<dyn Error + Send + Sync>>,
+    response: Result<Response, ErrorEnum>,
     filters: &Filters,
     payload: String,
     progress: Arc<Progress>,
-) {
+) -> Result<(), KillerError> {
     let no = progress
         .no_req
         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -201,13 +206,17 @@ pub async fn log_response(
                 });
             }
         }
-        Err(_) => {
-            let no = progress
-                .no_err
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            progress.pb.set_message(no.to_string());
-        }
+        Err(err) => match err {
+            ErrorEnum::ReqwestError => {
+                let no = progress
+                    .no_err
+                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                progress.pb.set_message(no.to_string());
+            }
+            ErrorEnum::KillerError(err) => return Err(err),
+        },
     }
+    Ok(())
 }
 
 // https://stackoverflow.com/questions/47070876/how-can-i-merge-two-json-objects-with-rust

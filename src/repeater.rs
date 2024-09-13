@@ -1,18 +1,17 @@
-use super::util::helper::{create_client, exit_with_err, filter_tokens, get_lines, log_response};
+use super::util::helper::{create_client, filter_tokens, get_lines, log_response};
 use super::util::structs::{
-    Csrf, Data, Payload, Progress, RequestPart, RequestParts, Settings, Target,
+    Csrf, Data, Payload, Progress, RequestPart, RequestParts, Settings, Target, ErrorEnum, KillerError
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::{Client, Response};
-use std::error::Error;
 use std::sync::atomic::AtomicU32;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub async fn create_poll(settings: Arc<Settings>) {
+pub async fn create_poll(settings: Arc<Settings>) -> Result<(), KillerError> {
     let (payload, total_req) = if settings.brute_force {
         // if brute force mode wordlist is requeres so
-        get_lines(settings.wordlist.as_ref().unwrap()).await
+        get_lines(settings.wordlist.as_ref().unwrap()).await?
     } else {
         (Arc::new(Payload::Future), 0_u64)
     };
@@ -49,14 +48,19 @@ pub async fn create_poll(settings: Arc<Settings>) {
     }
 
     for wk in workers {
-        let _ = wk.await;
+        wk.await.unwrap()?;
     }
 
     progress.pb.finish();
+    Ok(())
 }
 
-async fn worker(payload: Arc<Payload>, settings: Arc<Settings>, progress: Arc<Progress>) {
-    let client = create_client(Arc::clone(&settings));
+async fn worker(
+    payload: Arc<Payload>,
+    settings: Arc<Settings>,
+    progress: Arc<Progress>,
+) -> Result<(), KillerError> {
+    let client = create_client(Arc::clone(&settings))?;
 
     match *payload {
         Payload::Lines(ref lines) => loop {
@@ -64,40 +68,40 @@ async fn worker(payload: Arc<Payload>, settings: Arc<Settings>, progress: Arc<Pr
                 let mut lines = lines.lock().await;
                 lines.next_line().await.unwrap()
             };
-            match line {
-                Some(ln) => {
-                    let response = repeater(Arc::clone(&settings), client.clone(), &ln).await;
-                    log_response(response, &settings.filters, ln, Arc::clone(&progress)).await;
-                    progress.pb.inc(1);
-                    std::thread::sleep(Duration::from_millis(5));
-                }
-                None => break,
-            };
+            if let Some(ln) = line {
+                let response = repeater(Arc::clone(&settings), client.clone(), &ln).await;
+                log_response(response, &settings.filters, ln, Arc::clone(&progress)).await?;
+                progress.pb.inc(1);
+                std::thread::sleep(Duration::from_millis(5));
+            } else {
+                break;
+            }
         },
         _ => todo!(),
     }
+    Ok(())
 }
 
 async fn repeater(
     settings: Arc<Settings>,
     client: Client,
     line: &str,
-) -> Result<Response, Box<dyn Error + Send + Sync>> {
+) -> Result<Response, ErrorEnum> {
     let mut request_parts = RequestParts::new();
 
     if let Some(tokens) = csrf_request(client.clone(), &settings.csrf).await? {
         request_parts.extend(tokens);
     } else {
-        exit_with_err("Not found a value for the provided regexes", None);
+        return Err(KillerError {
+            detail: "Not found a value for the provided regexes",
+        }
+        .into());
     }
 
     target_request(client, &settings.target, request_parts, line).await
 }
 
-async fn csrf_request(
-    client: Client,
-    csrf: &Csrf,
-) -> Result<Option<RequestParts>, Box<dyn Error + Send + Sync>> {
+async fn csrf_request(client: Client, csrf: &Csrf) -> Result<Option<RequestParts>, ErrorEnum> {
     let response = client.get(&csrf.url).send().await?;
     let text = response.text().await?;
     Ok(filter_tokens(csrf, &text))
@@ -108,7 +112,7 @@ async fn target_request(
     target: &Target,
     mut request_parts: RequestParts,
     line: &str,
-) -> Result<Response, Box<dyn Error + Send + Sync>> {
+) -> Result<Response, ErrorEnum> {
     let url = &target.url.replace("FUZZ", line);
     let mut builder = match target.method.as_str() {
         "get" => client.get(url),
