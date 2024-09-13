@@ -5,6 +5,8 @@ use regex::Regex;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt::Display;
 use std::sync::atomic::AtomicU32;
 use tokio::fs::File;
 use tokio::io::BufReader;
@@ -85,7 +87,8 @@ impl Settings {
 
 pub struct Progress {
     pub pb: ProgressBar,
-    pub no: AtomicU32,
+    pub no_req: AtomicU32,
+    pub no_err: AtomicU32,
 }
 
 pub enum Payload {
@@ -167,5 +170,44 @@ impl RequestParts {
         }
 
         *self = new_values;
+    }
+}
+
+// Irrecuperable error if it is matched the progarm will be down
+#[derive(Debug)]
+pub struct KillerError {
+    pub detail: &'static str,
+}
+
+impl Display for KillerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", &self.detail)
+    }
+}
+
+impl Error for KillerError {}
+
+impl From<serde_json::Error> for KillerError {
+    fn from(value: serde_json::Error) -> Self {
+        Self {
+            detail: Box::leak(format!("Invalid json: {}", value).into_boxed_str()),
+        }
+    }
+}
+
+pub enum ErrorEnum {
+    ReqwestError,
+    KillerError(KillerError),
+}
+
+impl From<reqwest::Error> for ErrorEnum {
+    fn from(_: reqwest::Error) -> Self {
+        Self::ReqwestError
+    }
+}
+
+impl From<KillerError> for ErrorEnum {
+    fn from(value: KillerError) -> Self {
+        Self::KillerError(value)
     }
 }
