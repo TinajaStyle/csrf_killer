@@ -84,6 +84,14 @@ pub struct Args {
     pub concurrence: u16,
 
     #[arg(
+        long = "delay",
+        default_value = "0.005",
+        help_heading = "Performance",
+        help = "Delay between requests"
+    )]
+    pub delay: f32,
+
+    #[arg(
         long = "data-post",
         requires = "data_type",
         help_heading = "Target",
@@ -191,9 +199,13 @@ impl Args {
                 };
 
                 if data_type == "form" {
-                    validate_form(data_post)?
+                    Some(validate_form(data_post)?)
                 } else if data_type == "json" {
-                    Some(Data::Json(serde_json::from_str(data_post)?))
+                    Some(Data::Json(serde_json::from_str(data_post).map_err(
+                        |err| KillerError {
+                            detail: Box::leak(format!("Invalid json: {}", err).into_boxed_str()),
+                        },
+                    )?))
                 } else {
                     None
                 }

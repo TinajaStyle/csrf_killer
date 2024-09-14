@@ -42,6 +42,7 @@ pub struct Settings {
     pub csrf: Csrf,
     pub target: Target,
     pub concurrence: u16,
+    pub delay: f32,
     pub brute_force: bool,
     pub wordlist: Option<String>,
     pub options: RequestOptions,
@@ -66,6 +67,7 @@ impl Settings {
                 tokens,
             },
             concurrence: args.concurrence,
+            delay: args.delay,
             brute_force: args.brute_force,
             wordlist: args.wordlist.clone(),
             options: RequestOptions {
@@ -110,6 +112,12 @@ pub enum RequestPart {
 
 pub struct RequestParts {
     pub values: Vec<RequestPart>,
+}
+
+impl Default for RequestParts {
+    fn default() -> Self {
+        RequestParts::new()
+    }
 }
 
 impl RequestParts {
@@ -186,14 +194,6 @@ impl Display for KillerError {
 }
 
 impl Error for KillerError {}
-
-impl From<serde_json::Error> for KillerError {
-    fn from(value: serde_json::Error) -> Self {
-        Self {
-            detail: Box::leak(format!("Invalid json: {}", value).into_boxed_str()),
-        }
-    }
-}
 
 pub enum ErrorEnum {
     ReqwestError,

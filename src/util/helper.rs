@@ -17,6 +17,7 @@ use tokio::sync::Mutex;
 
 pub fn exit_with_err(err: KillerError) -> ! {
     log::error!("{}", err);
+    println!();
     std::process::exit(1);
 }
 
@@ -40,7 +41,9 @@ pub fn validate_tokens(
             (
                 // unwrap the unwrap
                 vt.get(1).unwrap().to_string(),
-                Regex::new(vt.get(2).unwrap()).unwrap(),
+                Regex::new(vt.get(2).unwrap()).map_err(|err| KillerError {
+                    detail: Box::leak(format!("Invalid Regex: {}", err).into_boxed_str()),
+                })?,
             ),
         );
     }
@@ -67,7 +70,7 @@ pub fn validate_headers(headers: &Vec<String>) -> Result<HeaderMap, KillerError>
     Ok(header_map)
 }
 
-pub fn validate_form(data: &str) -> Result<Option<Data>, KillerError> {
+pub fn validate_form(data: &str) -> Result<Data, KillerError> {
     let re = Regex::new(r"^([^=&]+=[^=&]+)(?:&[^=&]+=[^=&]+)*$").unwrap();
 
     if !re.is_match(data) {
@@ -88,7 +91,7 @@ pub fn validate_form(data: &str) -> Result<Option<Data>, KillerError> {
         );
     }
 
-    Ok(Some(Data::Form(form_hashmap)))
+    Ok(Data::Form(form_hashmap))
 }
 
 pub async fn get_lines(path: &str) -> Result<(Arc<Payload>, u64), KillerError> {
@@ -141,14 +144,32 @@ pub fn create_client(settings: Arc<Settings>) -> Result<Client, KillerError> {
 
     builder = builder.timeout(Duration::from_secs_f32(settings.options.timeout));
 
-    Ok(builder.build().expect("Faild to build Client"))
+    builder.build().map_err(|_| KillerError {
+        detail: "Faild to build the Client",
+    })
 }
 
-pub fn filter_tokens(csrf: &Csrf, text: &str) -> Option<RequestParts> {
+pub fn filter_tokens(csrf: &Csrf, text: &str) -> Result<RequestParts, KillerError> {
     let mut tokens = RequestParts::new();
 
     for (name, (position, re)) in csrf.tokens.iter() {
-        let matched = re.captures(text)?.iter().last()?.as_ref()?.as_str();
+        let matched = re
+            .captures(text)
+            .ok_or(KillerError {
+                detail: Box::leak(
+                    format!("Dont found a match for the regex of the token: {}", name)
+                        .into_boxed_str(),
+                ),
+            })?
+            .iter()
+            .last()
+            .ok_or(KillerError {
+                detail: "Can not get the last group of the regex",
+            })?
+            .ok_or(KillerError {
+                detail: "Can not get the value of the last group of the regex",
+            })?
+            .as_str();
 
         let token = match position.as_str() {
             "form" => {
@@ -166,12 +187,15 @@ pub fn filter_tokens(csrf: &Csrf, text: &str) -> Option<RequestParts> {
                 let cookie = format!("{}={}", name, matched);
                 RequestPart::Cookie(cookie)
             }
-            // KillerError?
-            _ => panic!("Invalid token position"),
+            _ => {
+                return Err(KillerError {
+                    detail: "Invalid token position",
+                })
+            }
         };
         tokens.add(token);
     }
-    Some(tokens)
+    Ok(tokens)
 }
 
 pub async fn log_response(

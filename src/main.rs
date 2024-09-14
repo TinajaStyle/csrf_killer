@@ -1,11 +1,9 @@
-mod repeater;
-mod util;
-
 use clap::Parser;
+use csrf_killer::repeater::create_poll;
+use csrf_killer::util::{cli::Args, helper::exit_with_err};
 use env_logger::{Builder, Env};
-use repeater::create_poll;
 use std::sync::Arc;
-use util::{cli::Args, helper::exit_with_err};
+use std::time::Duration;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -26,9 +24,8 @@ async fn main() {
             }
         },
         _ = tokio::signal::ctrl_c() => {
+            tokio::time::sleep(Duration::from_millis(5)).await;
             log::warn!("Shutdown");
         }
     }
-
-    println!();
 }

@@ -1,6 +1,7 @@
 use super::util::helper::{create_client, filter_tokens, get_lines, log_response};
 use super::util::structs::{
-    Csrf, Data, Payload, Progress, RequestPart, RequestParts, Settings, Target, ErrorEnum, KillerError
+    Csrf, Data, ErrorEnum, KillerError, Payload, Progress, RequestPart, RequestParts, Settings,
+    Target,
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::{Client, Response};
@@ -72,7 +73,7 @@ async fn worker(
                 let response = repeater(Arc::clone(&settings), client.clone(), &ln).await;
                 log_response(response, &settings.filters, ln, Arc::clone(&progress)).await?;
                 progress.pb.inc(1);
-                std::thread::sleep(Duration::from_millis(5));
+                tokio::time::sleep(Duration::from_secs_f32(settings.delay)).await;
             } else {
                 break;
             }
@@ -89,22 +90,16 @@ async fn repeater(
 ) -> Result<Response, ErrorEnum> {
     let mut request_parts = RequestParts::new();
 
-    if let Some(tokens) = csrf_request(client.clone(), &settings.csrf).await? {
-        request_parts.extend(tokens);
-    } else {
-        return Err(KillerError {
-            detail: "Not found a value for the provided regexes",
-        }
-        .into());
-    }
+    let tokens = csrf_request(client.clone(), &settings.csrf).await?;
+    request_parts.extend(tokens);
 
     target_request(client, &settings.target, request_parts, line).await
 }
 
-async fn csrf_request(client: Client, csrf: &Csrf) -> Result<Option<RequestParts>, ErrorEnum> {
+async fn csrf_request(client: Client, csrf: &Csrf) -> Result<RequestParts, ErrorEnum> {
     let response = client.get(&csrf.url).send().await?;
     let text = response.text().await?;
-    Ok(filter_tokens(csrf, &text))
+    Ok(filter_tokens(csrf, &text)?)
 }
 
 async fn target_request(
