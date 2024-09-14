@@ -1,11 +1,9 @@
-mod repeater;
-mod util;
-
 use clap::Parser;
+use csrf_killer::repeater::create_poll;
+use csrf_killer::util::{cli::Args, helper::exit_with_err};
 use env_logger::{Builder, Env};
-use repeater::create_poll;
 use std::sync::Arc;
-use util::cli::Args;
+use std::time::Duration;
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
@@ -14,9 +12,20 @@ async fn main() {
         .init();
 
     let args = Args::parse();
-    let settings = Arc::new(args.move_to_setting());
+    let settings = Arc::new(
+        args.move_to_setting()
+            .unwrap_or_else(|err| exit_with_err(err)),
+    );
 
-    create_poll(Arc::clone(&settings)).await;
-
-    println!();
+    tokio::select! {
+        result = create_poll(Arc::clone(&settings)) => {
+            if let Err(err) = result {
+                exit_with_err(err)
+            }
+        },
+        _ = tokio::signal::ctrl_c() => {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+            log::warn!("Shutdown");
+        }
+    }
 }

@@ -1,5 +1,5 @@
-use super::helper::{exit_with_err, validate_form, validate_headers, validate_tokens};
-use super::structs::{Data, Settings};
+use super::helper::{validate_form, validate_headers, validate_tokens};
+use super::structs::{Data, KillerError, Settings};
 use clap::builder::styling;
 use clap::{crate_authors, crate_name, crate_version, ArgAction, ArgGroup, Parser};
 
@@ -84,6 +84,14 @@ pub struct Args {
     pub concurrence: u16,
 
     #[arg(
+        long = "delay",
+        default_value = "0.005",
+        help_heading = "Performance",
+        help = "Delay between requests"
+    )]
+    pub delay: f32,
+
+    #[arg(
         long = "data-post",
         requires = "data_type",
         help_heading = "Target",
@@ -165,26 +173,24 @@ pub struct Args {
 }
 
 impl Args {
-    pub fn move_to_setting(self) -> Settings {
+    pub fn move_to_setting(self) -> Result<Settings, KillerError> {
         let mut found_fuzz = false;
 
         if self.url.contains("FUZZ") {
             found_fuzz = true;
         }
         // TODO fuzz in headers
-        #[allow(clippy::style)]
-        let headers = self
-            .headers
-            .as_ref()
-            .map(|headers| validate_headers(headers));
+        let headers = self.headers.as_ref().map(validate_headers).transpose()?;
 
-        let tokens = validate_tokens(&self.tokens);
+        let tokens = validate_tokens(&self.tokens)?;
 
         let data = match (&self.data_post, &self.data_type) {
             (Some(data_post), Some(data_type)) => {
                 for (pos, _) in tokens.values() {
                     if (pos == "json" || pos == "form") && data_type != pos {
-                        exit_with_err("Can't send json and form in the same request", None);
+                        return Err(KillerError {
+                            detail: "Can't send json and form in the same request",
+                        });
                     }
                 }
 
@@ -193,11 +199,13 @@ impl Args {
                 };
 
                 if data_type == "form" {
-                    validate_form(data_post)
+                    Some(validate_form(data_post)?)
                 } else if data_type == "json" {
-                    Some(Data::Json(serde_json::from_str(data_post).unwrap_or_else(
-                        |err| exit_with_err("Invalid JSON provided", Some(&err)),
-                    )))
+                    Some(Data::Json(serde_json::from_str(data_post).map_err(
+                        |err| KillerError {
+                            detail: Box::leak(format!("Invalid json: {}", err).into_boxed_str()),
+                        },
+                    )?))
                 } else {
                     None
                 }
@@ -206,9 +214,11 @@ impl Args {
         };
 
         if self.brute_force && !found_fuzz {
-            exit_with_err("Mode brute force without FUZZ keyword", None);
+            return Err(KillerError {
+                detail: "Mode brute force without FUZZ keyword",
+            });
         }
 
-        Settings::from_args(&self, tokens, data, headers)
+        Ok(Settings::from_args(&self, tokens, data, headers))
     }
 }

@@ -5,6 +5,8 @@ use regex::Regex;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::error::Error;
+use std::fmt::Display;
 use std::sync::atomic::AtomicU32;
 use tokio::fs::File;
 use tokio::io::BufReader;
@@ -40,6 +42,7 @@ pub struct Settings {
     pub csrf: Csrf,
     pub target: Target,
     pub concurrence: u16,
+    pub delay: f32,
     pub brute_force: bool,
     pub wordlist: Option<String>,
     pub options: RequestOptions,
@@ -64,6 +67,7 @@ impl Settings {
                 tokens,
             },
             concurrence: args.concurrence,
+            delay: args.delay,
             brute_force: args.brute_force,
             wordlist: args.wordlist.clone(),
             options: RequestOptions {
@@ -85,7 +89,8 @@ impl Settings {
 
 pub struct Progress {
     pub pb: ProgressBar,
-    pub no: AtomicU32,
+    pub no_req: AtomicU32,
+    pub no_err: AtomicU32,
 }
 
 pub enum Payload {
@@ -107,6 +112,12 @@ pub enum RequestPart {
 
 pub struct RequestParts {
     pub values: Vec<RequestPart>,
+}
+
+impl Default for RequestParts {
+    fn default() -> Self {
+        RequestParts::new()
+    }
 }
 
 impl RequestParts {
@@ -167,5 +178,36 @@ impl RequestParts {
         }
 
         *self = new_values;
+    }
+}
+
+// Irrecuperable error if it is matched the progarm will be down
+#[derive(Debug)]
+pub struct KillerError {
+    pub detail: &'static str,
+}
+
+impl Display for KillerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", &self.detail)
+    }
+}
+
+impl Error for KillerError {}
+
+pub enum ErrorEnum {
+    ReqwestError,
+    KillerError(KillerError),
+}
+
+impl From<reqwest::Error> for ErrorEnum {
+    fn from(_: reqwest::Error) -> Self {
+        Self::ReqwestError
+    }
+}
+
+impl From<KillerError> for ErrorEnum {
+    fn from(value: KillerError) -> Self {
+        Self::KillerError(value)
     }
 }
