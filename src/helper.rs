@@ -1,6 +1,5 @@
 use super::structs::{
-    Csrf, Data, ErrorEnum, Filters, KillerError, Payload, Progress, RequestPart, RequestParts,
-    Settings,
+    Csrf, Data, ErrorEnum, Filters, KillerError, Progress, RequestPart, RequestParts, Settings,
 };
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -9,14 +8,15 @@ use reqwest::{Client, Proxy, Response};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{atomic::Ordering::Relaxed, Arc};
 use std::time::Duration;
 use tokio::fs::File;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines};
 use tokio::sync::Mutex;
 
 pub fn exit_with_err(err: KillerError) -> ! {
     log::error!("{}", err);
+    println!();
     std::process::exit(1);
 }
 
@@ -30,7 +30,7 @@ pub fn validate_tokens(
         if vt.len() != 3 {
             return Err(KillerError {
                 detail: Box::leak(
-                    format!("Invalid token struct: {}, must be == separate", token)
+                    format!("Invalid token struct: {}, must be == separated", token)
                         .into_boxed_str(),
                 ),
             });
@@ -38,9 +38,10 @@ pub fn validate_tokens(
         token_hashmap.insert(
             vt.first().unwrap().to_string(),
             (
-                // unwrap the unwrap
                 vt.get(1).unwrap().to_string(),
-                Regex::new(vt.get(2).unwrap()).unwrap(),
+                Regex::new(vt.get(2).unwrap()).map_err(|err| KillerError {
+                    detail: Box::leak(format!("Invalid Regex: {}", err).into_boxed_str()),
+                })?,
             ),
         );
     }
@@ -55,7 +56,7 @@ pub fn validate_headers(headers: &Vec<String>) -> Result<HeaderMap, KillerError>
         if pair.len() != 2 {
             return Err(KillerError {
                 detail: Box::leak(
-                    format!("Invalid header: {}, must be : separate", header).into_boxed_str(),
+                    format!("Invalid header: {}, must be : separated", header).into_boxed_str(),
                 ),
             });
         }
@@ -67,7 +68,7 @@ pub fn validate_headers(headers: &Vec<String>) -> Result<HeaderMap, KillerError>
     Ok(header_map)
 }
 
-pub fn validate_form(data: &str) -> Result<Option<Data>, KillerError> {
+pub fn validate_form(data: &str) -> Result<HashMap<String, String>, KillerError> {
     let re = Regex::new(r"^([^=&]+=[^=&]+)(?:&[^=&]+=[^=&]+)*$").unwrap();
 
     if !re.is_match(data) {
@@ -88,12 +89,14 @@ pub fn validate_form(data: &str) -> Result<Option<Data>, KillerError> {
         );
     }
 
-    Ok(Some(Data::Form(form_hashmap)))
+    Ok(form_hashmap)
 }
 
-pub async fn get_lines(path: &str) -> Result<(Arc<Payload>, u64), KillerError> {
+pub async fn get_lines(
+    path: &str,
+) -> Result<(Arc<Mutex<Lines<BufReader<File>>>>, u64), KillerError> {
     let file = File::open(path).await.map_err(|_| KillerError {
-        detail: "Cant open the wordlist",
+        detail: "Can't open the wordlist",
     })?;
 
     let mut reader = BufReader::new(file).lines();
@@ -103,13 +106,11 @@ pub async fn get_lines(path: &str) -> Result<(Arc<Payload>, u64), KillerError> {
     }
 
     let file = File::open(path).await.map_err(|_| KillerError {
-        detail: "Cant open the wordlist",
+        detail: "Can't open the wordlist",
     })?;
 
-    Ok((
-        Arc::new(Payload::Lines(Mutex::new(BufReader::new(file).lines()))),
-        count,
-    ))
+    let a = BufReader::new(file).lines();
+    Ok((Arc::new(Mutex::new(a)), count))
 }
 
 pub fn create_client(settings: Arc<Settings>) -> Result<Client, KillerError> {
@@ -141,20 +142,43 @@ pub fn create_client(settings: Arc<Settings>) -> Result<Client, KillerError> {
 
     builder = builder.timeout(Duration::from_secs_f32(settings.options.timeout));
 
-    Ok(builder.build().expect("Faild to build Client"))
+    builder.build().map_err(|_| KillerError {
+        detail: "Faild to build the Client",
+    })
 }
 
-pub fn filter_tokens(csrf: &Csrf, text: &str) -> Option<RequestParts> {
+pub fn filter_tokens(csrf: &Csrf, text: &str) -> Result<RequestParts, KillerError> {
     let mut tokens = RequestParts::new();
 
     for (name, (position, re)) in csrf.tokens.iter() {
-        let matched = re.captures(text)?.iter().last()?.as_ref()?.as_str();
+        let matched = re
+            .captures(text)
+            .ok_or(KillerError {
+                detail: Box::leak(
+                    format!("Don't found a match for the regex of the token: {}", name)
+                        .into_boxed_str(),
+                ),
+            })?
+            .iter()
+            .last()
+            .ok_or(KillerError {
+                detail: "Can not get the last group of the regex",
+            })?
+            .ok_or(KillerError {
+                detail: "Can not get the value of the last group of the regex",
+            })?
+            .as_str();
 
         let token = match position.as_str() {
             "form" => {
                 let mut hash_map = HashMap::new();
                 hash_map.insert(name.to_string(), matched.to_string());
                 RequestPart::Data(Data::Form(hash_map))
+            }
+            "multipart" => {
+                let mut hash_map = HashMap::new();
+                hash_map.insert(name.to_string(), matched.to_string());
+                RequestPart::Data(Data::PartText(hash_map))
             }
             "json" => {
                 let json_str = format!("{{\"{}\": \"{}\"}}", name, matched);
@@ -166,12 +190,44 @@ pub fn filter_tokens(csrf: &Csrf, text: &str) -> Option<RequestParts> {
                 let cookie = format!("{}={}", name, matched);
                 RequestPart::Cookie(cookie)
             }
-            // KillerError?
-            _ => panic!("Invalid token position"),
+            _ => {
+                return Err(KillerError {
+                    detail: "Invalid token position",
+                })
+            }
         };
         tokens.add(token);
     }
-    Some(tokens)
+    Ok(tokens)
+}
+
+pub async fn get_part_file(field_name: &str, path: &str) -> Result<RequestPart, KillerError> {
+    let mut file = File::open(path).await.map_err(|_| KillerError {
+        detail: Box::leak(format!("Error open the file: {}", path).into_boxed_str()),
+    })?;
+    let mut buffer = Vec::new();
+    let _ = file
+        .read_to_end(&mut buffer)
+        .await
+        .map_err(|_| KillerError {
+            detail: Box::leak(format!("Error read the file: {}", path).into_boxed_str()),
+        })?;
+    let mime = mime_guess::from_path(path).first_or_text_plain();
+
+    // The file was open and if dont exist KillerError is returned so unwrap is ok
+    let name = std::path::Path::new(path)
+        .file_name()
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+
+    Ok(RequestPart::Data(Data::File(
+        field_name.to_string(),
+        name,
+        mime.to_string(),
+        buffer,
+    )))
 }
 
 pub async fn log_response(
@@ -180,9 +236,7 @@ pub async fn log_response(
     payload: String,
     progress: Arc<Progress>,
 ) -> Result<(), KillerError> {
-    let no = progress
-        .no_req
-        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let no = progress.no_req.fetch_add(1, Relaxed);
 
     match response {
         Ok(response) => {
@@ -207,10 +261,8 @@ pub async fn log_response(
             }
         }
         Err(err) => match err {
-            ErrorEnum::ReqwestError => {
-                let no = progress
-                    .no_err
-                    .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ErrorEnum::ReqwestError(_) => {
+                let no = progress.no_err.fetch_add(1, Relaxed);
                 progress.pb.set_message(no.to_string());
             }
             ErrorEnum::KillerError(err) => return Err(err),
@@ -229,5 +281,27 @@ pub fn merge_json(a: &mut Value, b: Value) {
             }
         }
         (a, b) => *a = b,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_tokens() {
+        let vec = vec!["token==form==a(.*?)b".to_string()];
+        let result = validate_tokens(&vec);
+        assert!(result.is_ok());
+
+        // unclose regex group
+        let vec = vec!["token==form==a(.*?b".to_string()];
+        let result = validate_tokens(&vec);
+        assert!(result.is_err());
+
+        // invalid separator
+        let vec = vec!["token==form=a(.*?)b".to_string()];
+        let result = validate_tokens(&vec);
+        assert!(result.is_err())
     }
 }

@@ -15,6 +15,7 @@ const STYLES: styling::Styles = styling::Styles::styled()
     about = "delete csrf",
     version = crate_version!(),
     styles(STYLES),
+    group(ArgGroup::new("modes").args(&["brute_force", "upload_files"])),
     group(ArgGroup::new("filters").args(&["no_status", "no_length", "no_words", "no_chars"])),
     long_about = None
 )]
@@ -75,6 +76,33 @@ pub struct Args {
     pub wordlist: Option<String>,
 
     #[arg(
+        long = "upload-files",
+        requires = "file_paths",
+        requires = "field_name",
+        conflicts_with = "data_post",
+        help_heading = "Mode",
+        help = "Upload files continuously"
+    )]
+    pub upload_files: bool,
+
+    #[arg(
+        short = 'f',
+        long = "file-paths",
+        requires = "upload_files",
+        help_heading = "Upload File Options",
+        help = "Path to the file that contains the paths of the files to upload"
+    )]
+    pub file_paths: Option<String>,
+
+    #[arg(
+        long = "field-name",
+        requires = "upload_files",
+        help_heading = "Upload File Options",
+        help = "The name of the field where the files will be sent"
+    )]
+    pub field_name: Option<String>,
+
+    #[arg(
         short = 'T',
         long = "concurrence",
         default_value = "10",
@@ -82,6 +110,14 @@ pub struct Args {
         help = "Number of concurrence tasks"
     )]
     pub concurrence: u16,
+
+    #[arg(
+        long = "delay",
+        default_value = "0.005",
+        help_heading = "Performance",
+        help = "Delay between requests"
+    )]
+    pub delay: f32,
 
     #[arg(
         long = "data-post",
@@ -93,7 +129,7 @@ pub struct Args {
 
     #[arg(
         long = "data-type",
-        value_parser = ["json", "form"],
+        value_parser = ["json", "form", "multipart"],
         help_heading = "Target",
         help = "The content type of the data post"
     )]
@@ -179,9 +215,9 @@ impl Args {
         let data = match (&self.data_post, &self.data_type) {
             (Some(data_post), Some(data_type)) => {
                 for (pos, _) in tokens.values() {
-                    if (pos == "json" || pos == "form") && data_type != pos {
+                    if (pos == "json" || pos == "form" || pos == "multipart") && data_type != pos {
                         return Err(KillerError {
-                            detail: "Can't send json and form in the same request",
+                            detail: "Can't send multiples data type in the same request ex: json and form",
                         });
                     }
                 }
@@ -191,11 +227,17 @@ impl Args {
                 };
 
                 if data_type == "form" {
-                    validate_form(data_post)?
+                    Some(Data::Form(validate_form(data_post)?))
                 } else if data_type == "json" {
-                    Some(Data::Json(serde_json::from_str(data_post)?))
+                    Some(Data::Json(serde_json::from_str(data_post).map_err(
+                        |err| KillerError {
+                            detail: Box::leak(format!("Invalid json: {}", err).into_boxed_str()),
+                        },
+                    )?))
+                } else if data_type == "multipart" {
+                    Some(Data::PartText(validate_form(data_post)?))
                 } else {
-                    None
+                    unreachable!()
                 }
             }
             (_, _) => None,
