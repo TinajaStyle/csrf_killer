@@ -5,31 +5,36 @@ use super::structs::{
 };
 use indicatif::{ProgressBar, ProgressStyle};
 use reqwest::{multipart, Client, Response};
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::{BufReader, Lines};
 use tokio::sync::Mutex;
 
-pub async fn create_poll(settings: Arc<Settings>) -> Result<(), KillerError> {
+/// Gets the lines of the given file to distribute them by workers.
+///
+/// Initializes the progress bar.
+pub async fn create_workers(settings: Arc<Settings>) -> Result<(), KillerError> {
     let (lines, total_req) = if settings.modes.brute_force {
         // if brute force mode is true, wordlist is requeres then
         get_lines(settings.modes.wordlist.as_ref().unwrap()).await?
-    } else {
+    } else if settings.modes.upload_files {
         // if file upload mode is true, file_paths is required then
         get_lines(settings.modes.file_paths.as_ref().unwrap()).await?
+    } else {
+        todo!()
     };
 
     println!(
         "{:<10} {:<15} {:<15} {:<15} {:<15} {:<15}",
-        "#", "Status", "Length", "Words", "Chars", "Payload"
+        "#", "Status", "Length", "Lines", "Words", "Payload"
     );
 
     let progress = Arc::new(Progress {
         pb: ProgressBar::new(total_req),
-        no_req: AtomicU32::new(1),
-        no_err: AtomicU32::new(1),
+        no_req: AtomicUsize::new(1),
+        no_err: AtomicUsize::new(1),
     });
 
     progress.pb.set_style(
@@ -37,7 +42,7 @@ pub async fn create_poll(settings: Arc<Settings>) -> Result<(), KillerError> {
             "{spinner:.green} {percent}% [{bar:50.cyan/blue}] \
             {pos:.cyan}/{len:.blue} [Errors: {msg:.red}] [ETA: {eta_precise}]",
         )
-        .expect("Error in load template to progress bar")
+        .expect("Error loading template in progress bar")
         .progress_chars("=>-"),
     );
     progress.pb.enable_steady_tick(Duration::from_millis(100));
@@ -60,12 +65,14 @@ pub async fn create_poll(settings: Arc<Settings>) -> Result<(), KillerError> {
     Ok(())
 }
 
+/// This continuously tries to read a line from the file, if it exists it starts the attack and log
+/// the response otherwise it stop.
 async fn worker(
     lines: Arc<Mutex<Lines<BufReader<File>>>>,
     settings: Arc<Settings>,
     progress: Arc<Progress>,
 ) -> Result<(), KillerError> {
-    let client = create_client(Arc::clone(&settings))?;
+    let client = create_client(&settings.options)?;
 
     loop {
         let line = {
@@ -78,8 +85,10 @@ async fn worker(
             } else {
                 Payload::Upload(settings.modes.field_name.as_ref().unwrap(), &ln)
             };
+
             let response = repeater(Arc::clone(&settings), client.clone(), &payload).await;
             log_response(response, &settings.filters, ln, Arc::clone(&progress)).await?;
+
             progress.pb.inc(1);
             tokio::time::sleep(Duration::from_secs_f32(settings.delay)).await;
         } else {
@@ -89,6 +98,7 @@ async fn worker(
     Ok(())
 }
 
+/// Request to the csrf url and exploit to the target url.
 async fn repeater(
     settings: Arc<Settings>,
     client: Client,
@@ -102,12 +112,24 @@ async fn repeater(
     target_request(client, &settings.target, request_parts, payload).await
 }
 
+/// Make a request to the given url to get the token(s).
+///
+/// # Error
+///
+/// if dont found a value for a regex for a token or request fail.
 async fn csrf_request(client: Client, csrf: &Csrf) -> Result<RequestParts, ErrorEnum> {
     let response = client.get(&csrf.url).send().await?;
     let text = response.text().await?;
     Ok(filter_tokens(csrf, &text)?)
 }
 
+/// For the payload Line change the FUZZ keyword to this one and make the request.
+///
+/// For the payload Upload takes the contents of the file and sends it by multipart.
+///
+/// # Errors
+///
+/// If the file can't be opened or the request fail.
 async fn target_request(
     client: Client,
     target: &Target,

@@ -1,8 +1,11 @@
 [package]
 name = "csrf_killer"
+version = "0.3.1"
 author = "TinajaStyle"
-version = "0.3.0"
 edition = "2021"
+repository = "https://github.com/TinajaStyle/csrf_killer"
+description = "A tool designed to simplify security testing by automating the exploitation of CSRF defenses"
+keywords = ["pentest", "url-bruteforce"]
 
 [dependencies]
 reqwest = {version = "0.12.7", features = ["json", "multipart", "cookies"]}

@@ -1,7 +1,9 @@
 use super::helper::{validate_form, validate_headers, validate_tokens};
 use super::structs::{Data, KillerError, Settings};
 use clap::builder::styling;
-use clap::{crate_authors, crate_name, crate_version, ArgAction, ArgGroup, Parser};
+use clap::{
+    crate_authors, crate_description, crate_name, crate_version, ArgAction, ArgGroup, Parser,
+};
 
 const STYLES: styling::Styles = styling::Styles::styled()
     .header(styling::AnsiColor::Blue.on_default().bold())
@@ -12,11 +14,11 @@ const STYLES: styling::Styles = styling::Styles::styled()
 #[command(
     author = crate_authors!(),
     name = crate_name!(),
-    about = "delete csrf",
+    about = crate_description!(),
     version = crate_version!(),
     styles(STYLES),
-    group(ArgGroup::new("modes").args(&["brute_force", "upload_files"])),
-    group(ArgGroup::new("filters").args(&["no_status", "no_length", "no_words", "no_chars"])),
+    group(ArgGroup::new("modes").args(&["brute_force", "upload_files"]).required(true)),
+    group(ArgGroup::new("filters").args(&["no_status", "no_length", "no_words", "no_lines"])),
     long_about = None
 )]
 pub struct Args {
@@ -34,7 +36,7 @@ pub struct Args {
         long = "csrf-url",
         required = true,
         help_heading = "CSRF",
-        help = "Url to take the csrf tokens"
+        help = "Url to take the csrf token(s)"
     )]
     pub csrf_url: String,
 
@@ -43,8 +45,9 @@ pub struct Args {
         long = "token",
         required = true,
         help_heading = "CSRF",
-        help = "Token 'token_name==where_send==regex' to filter and add. \
-                Can accept multiples call. The token can be send in [form, json, query, header, cookie]"
+        help = "Token 'token_name==type==regex' to filter and add. \
+                Can accept multiples call. The token can be send in \
+                [form, json, multipart, query, header, cookie]"
     )]
     pub tokens: Vec<String>,
 
@@ -123,7 +126,7 @@ pub struct Args {
         long = "data-post",
         requires = "data_type",
         help_heading = "Target",
-        help = "Data to tramite in post"
+        help = "Data to send in post"
     )]
     pub data_post: Option<String>,
 
@@ -186,21 +189,23 @@ pub struct Args {
     pub no_length: Option<u64>,
 
     #[arg(
+        long = "no-lines",
+        help_heading = "Filters",
+        help = "Do not show lines"
+    )]
+    pub no_lines: Option<usize>,
+
+    #[arg(
         long = "no-words",
         help_heading = "Filters",
         help = "Do not show words"
     )]
-    pub no_words: Option<u64>,
-
-    #[arg(
-        long = "no-chars",
-        help_heading = "Filters",
-        help = "Do not show chars"
-    )]
-    pub no_chars: Option<u64>,
+    pub no_words: Option<usize>,
 }
 
 impl Args {
+    /// This does extra validations on the arguments and moves them to the Settings structure
+    /// which is more efficient.
     pub fn move_to_setting(self) -> Result<Settings, KillerError> {
         let mut found_fuzz = false;
 

@@ -1,5 +1,6 @@
 use super::structs::{
-    Csrf, Data, ErrorEnum, Filters, KillerError, Progress, RequestPart, RequestParts, Settings,
+    Csrf, Data, ErrorEnum, Filters, KillerError, Progress, RequestOptions, RequestPart,
+    RequestParts,
 };
 use regex::Regex;
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue};
@@ -13,6 +14,20 @@ use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, BufReader, Lines};
 use tokio::sync::Mutex;
+
+pub fn art() {
+    let ascii = r#""
+
+        .·:'''''''''''''''''''''''''''''''''''''''''''''''''':·.
+        : :   ___  __  ___ ___   _  ___ _   _   _   ___ ___  : :
+        : :  / _//' _/| _ \ __| | |/ / | | | | | | | __| _ \ : :
+        : : | \__`._`.| v / _|  |   <| | |_| |_| |_| _|| v / : :
+        : :  \__/|___/|_|_\_|   |_|\_\_|___|___|___|___|_|_\ : :
+        '·:..................................................:·'
+     "#;
+
+    println!("{ascii}");
+}
 
 pub fn exit_with_err(err: KillerError) -> ! {
     log::error!("{}", err);
@@ -113,21 +128,22 @@ pub async fn get_lines(
     Ok((Arc::new(Mutex::new(a)), count))
 }
 
-pub fn create_client(settings: Arc<Settings>) -> Result<Client, KillerError> {
+/// Creates the ClientBuilder according to the given options.
+pub fn create_client(options: &RequestOptions) -> Result<Client, KillerError> {
     let mut builder = reqwest::Client::builder();
 
-    if settings.options.store_cookies {
+    if options.store_cookies {
         builder = builder.cookie_store(true);
     }
-    if let Some(headers) = &settings.options.headers {
+    if let Some(headers) = &options.headers {
         builder = builder.default_headers(headers.clone());
     }
 
-    if !settings.options.redirects {
+    if !options.redirects {
         builder = builder.redirect(Policy::none())
     }
 
-    if let Some(proxy) = &settings.options.proxy {
+    if let Some(proxy) = &options.proxy {
         builder = builder
             .proxy(Proxy::http(proxy).map_err(|_| KillerError {
                 detail: "Invalid proxy",
@@ -137,10 +153,11 @@ pub fn create_client(settings: Arc<Settings>) -> Result<Client, KillerError> {
             })?)
     }
 
-    // add comments
+    // should there be an arg?
     builder = builder.danger_accept_invalid_certs(true);
 
-    builder = builder.timeout(Duration::from_secs_f32(settings.options.timeout));
+    // default 5
+    builder = builder.timeout(Duration::from_secs_f32(options.timeout));
 
     builder.build().map_err(|_| KillerError {
         detail: "Faild to build the Client",
@@ -243,19 +260,19 @@ pub async fn log_response(
             let status_code = response.status().as_u16();
             let content_length = response.content_length().unwrap_or(0);
             let text = response.text().await.unwrap_or(String::new());
-            let words = text.split_whitespace().count() as u64;
-            let chars = text.chars().count() as u64;
+            let lines = text.lines().count();
+            let words = text.split_whitespace().count();
 
             let fl = filters.status.map_or(false, |f| f == status_code)
                 || filters.length.map_or(false, |f| f == content_length)
                 || filters.words.map_or(false, |f| f == words)
-                || filters.chars.map_or(false, |f| f == chars);
+                || filters.lines.map_or(false, |f| f == lines);
 
             if !fl {
                 progress.pb.suspend(|| {
                     println!(
                         "{:<10} {:<15} {:<15} {:<15} {:<15} {:<15}",
-                        no, status_code, content_length, words, chars, payload
+                        no, status_code, content_length, lines, words, payload
                     );
                 });
             }

@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::Display;
-use std::sync::atomic::AtomicU32;
+use std::sync::atomic::AtomicUsize;
 
 pub struct Csrf {
     pub url: String,
@@ -31,8 +31,8 @@ pub struct Modes {
 pub struct Filters {
     pub status: Option<u16>,
     pub length: Option<u64>,
-    pub words: Option<u64>,
-    pub chars: Option<u64>,
+    pub lines: Option<usize>,
+    pub words: Option<usize>,
 }
 
 pub struct RequestOptions {
@@ -90,7 +90,7 @@ impl Settings {
                 status: args.no_status,
                 length: args.no_length,
                 words: args.no_words,
-                chars: args.no_chars,
+                lines: args.no_lines,
             },
         }
     }
@@ -98,8 +98,8 @@ impl Settings {
 
 pub struct Progress {
     pub pb: ProgressBar,
-    pub no_req: AtomicU32,
-    pub no_err: AtomicU32,
+    pub no_req: AtomicUsize,
+    pub no_err: AtomicUsize,
 }
 
 pub enum Payload<'a> {
@@ -192,7 +192,9 @@ impl RequestParts {
         let mut new_values = RequestParts::new();
 
         while let Some(part) = self.values.pop() {
-            // esplicar cada no join
+            // this don't need to join:
+            // Query | PartText | File: the RequestBuilder can unite them
+            // Header: unless they are in the RequestBuilder can unite without overwrite
             if matches!(
                 part,
                 RequestPart::Query(..)
@@ -220,7 +222,7 @@ impl RequestParts {
     }
 }
 
-// Irrecuperable error if it is matched the progarm will be down
+/// Unrecoverable error if matched progarm will stop
 #[derive(Debug)]
 pub struct KillerError {
     pub detail: &'static str,
@@ -234,7 +236,9 @@ impl Display for KillerError {
 
 impl Error for KillerError {}
 
+/// Union between KillerError and reqwest::Error
 pub enum ErrorEnum {
+    #[allow(dead_code)]
     ReqwestError(reqwest::Error),
     KillerError(KillerError),
 }
