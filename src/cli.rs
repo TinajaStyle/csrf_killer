@@ -123,6 +123,14 @@ pub struct Args {
     pub delay: f32,
 
     #[arg(
+        long = "repeat",
+        default_value = "1",
+        help_heading = "Performance",
+        help = "Repeat a payload x times"
+    )]
+    pub repeat: u16,
+
+    #[arg(
         long = "data-post",
         requires = "data_type",
         help_heading = "Target",
@@ -222,7 +230,7 @@ impl Args {
                 for (pos, _) in tokens.values() {
                     if (pos == "json" || pos == "form" || pos == "multipart") && data_type != pos {
                         return Err(KillerError {
-                            detail: "Can't send multiples data type in the same request ex: json and form",
+                            detail: "Can't send multiples data type in the same request ex: json and form".into(),
                         });
                     }
                 }
@@ -236,7 +244,7 @@ impl Args {
                 } else if data_type == "json" {
                     Some(Data::Json(serde_json::from_str(data_post).map_err(
                         |err| KillerError {
-                            detail: Box::leak(format!("Invalid json: {}", err).into_boxed_str()),
+                            detail: format!("Invalid json: {}", err).into(),
                         },
                     )?))
                 } else if data_type == "multipart" {
@@ -250,7 +258,7 @@ impl Args {
 
         if self.brute_force && !found_fuzz {
             return Err(KillerError {
-                detail: "Mode brute force without FUZZ keyword",
+                detail: "Mode brute force without FUZZ keyword".into(),
             });
         }
 

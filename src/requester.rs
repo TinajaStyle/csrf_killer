@@ -32,7 +32,7 @@ pub async fn create_workers(settings: Arc<Settings>) -> Result<(), KillerError> 
     );
 
     let progress = Arc::new(Progress {
-        pb: ProgressBar::new(total_req),
+        pb: ProgressBar::new(total_req * settings.repeat as u64),
         no_req: AtomicUsize::new(1),
         no_err: AtomicUsize::new(1),
     });
@@ -75,20 +75,21 @@ async fn worker(
     let client = create_client(&settings.options)?;
 
     loop {
-        let line = {
+        let opline = {
             let mut lines = lines.lock().await;
             lines.next_line().await.unwrap()
         };
-        if let Some(ln) = line {
+        if let Some(line) = opline {
             let payload = if settings.modes.brute_force {
-                Payload::Line(&ln)
+                Payload::Line(&line)
             } else {
-                Payload::Upload(settings.modes.field_name.as_ref().unwrap(), &ln)
+                Payload::Upload(settings.modes.field_name.as_ref().unwrap(), &line)
             };
 
-            let response = repeater(Arc::clone(&settings), client.clone(), &payload).await;
-            log_response(response, &settings.filters, ln, Arc::clone(&progress)).await?;
-
+            for _ in 0..settings.repeat {
+                let response = repeater(Arc::clone(&settings), client.clone(), &payload).await;
+                log_response(response, &settings.filters, &line, Arc::clone(&progress)).await?;
+            }
             progress.pb.inc(1);
             tokio::time::sleep(Duration::from_secs_f32(settings.delay)).await;
         } else {

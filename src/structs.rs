@@ -4,6 +4,7 @@ use indicatif::ProgressBar;
 use regex::Regex;
 use reqwest::header::HeaderMap;
 use serde_json::Value;
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::error::Error;
 use std::fmt::Display;
@@ -49,6 +50,7 @@ pub struct Settings {
     pub modes: Modes,
     pub concurrence: u16,
     pub delay: f32,
+    pub repeat: u16,
     pub options: RequestOptions,
     pub filters: Filters,
 }
@@ -79,6 +81,7 @@ impl Settings {
             },
             concurrence: args.concurrence,
             delay: args.delay,
+            repeat: args.repeat,
             options: RequestOptions {
                 store_cookies: args.store_cookies,
                 headers,
@@ -222,10 +225,10 @@ impl RequestParts {
     }
 }
 
-/// Unrecoverable error if matched progarm will stop
+/// Unrecoverable error if matched program will stop
 #[derive(Debug)]
 pub struct KillerError {
-    pub detail: &'static str,
+    pub detail: Cow<'static, str>,
 }
 
 impl Display for KillerError {

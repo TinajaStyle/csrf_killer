@@ -44,10 +44,7 @@ pub fn validate_tokens(
         let vt: Vec<&str> = token.split("==").collect();
         if vt.len() != 3 {
             return Err(KillerError {
-                detail: Box::leak(
-                    format!("Invalid token struct: {}, must be == separated", token)
-                        .into_boxed_str(),
-                ),
+                detail: format!("Invalid token struct: {}, must be == separated", token).into(),
             });
         }
         token_hashmap.insert(
@@ -55,7 +52,7 @@ pub fn validate_tokens(
             (
                 vt.get(1).unwrap().to_string(),
                 Regex::new(vt.get(2).unwrap()).map_err(|err| KillerError {
-                    detail: Box::leak(format!("Invalid Regex: {}", err).into_boxed_str()),
+                    detail: format!("Invalid Regex: {}", err).into(),
                 })?,
             ),
         );
@@ -70,9 +67,7 @@ pub fn validate_headers(headers: &Vec<String>) -> Result<HeaderMap, KillerError>
         let pair: Vec<&str> = header.split(':').collect();
         if pair.len() != 2 {
             return Err(KillerError {
-                detail: Box::leak(
-                    format!("Invalid header: {}, must be : separated", header).into_boxed_str(),
-                ),
+                detail: format!("Invalid header: {}, must be : separated", header).into(),
             });
         }
         header_map.insert(
@@ -88,7 +83,7 @@ pub fn validate_form(data: &str) -> Result<HashMap<String, String>, KillerError>
 
     if !re.is_match(data) {
         return Err(KillerError {
-            detail: "Invalid format of form data",
+            detail: "Invalid format of form data".into(),
         });
     }
 
@@ -111,7 +106,7 @@ pub async fn get_lines(
     path: &str,
 ) -> Result<(Arc<Mutex<Lines<BufReader<File>>>>, u64), KillerError> {
     let file = File::open(path).await.map_err(|_| KillerError {
-        detail: "Can't open the wordlist",
+        detail: "Can't open the wordlist".into(),
     })?;
 
     let mut reader = BufReader::new(file).lines();
@@ -121,7 +116,7 @@ pub async fn get_lines(
     }
 
     let file = File::open(path).await.map_err(|_| KillerError {
-        detail: "Can't open the wordlist",
+        detail: "Can't open the wordlist".into(),
     })?;
 
     let a = BufReader::new(file).lines();
@@ -146,10 +141,10 @@ pub fn create_client(options: &RequestOptions) -> Result<Client, KillerError> {
     if let Some(proxy) = &options.proxy {
         builder = builder
             .proxy(Proxy::http(proxy).map_err(|_| KillerError {
-                detail: "Invalid proxy",
+                detail: "Invalid proxy".into(),
             })?)
             .proxy(Proxy::https(proxy).map_err(|_| KillerError {
-                detail: "Invalid proxy",
+                detail: "Invalid proxy".into(),
             })?)
     }
 
@@ -160,7 +155,7 @@ pub fn create_client(options: &RequestOptions) -> Result<Client, KillerError> {
     builder = builder.timeout(Duration::from_secs_f32(options.timeout));
 
     builder.build().map_err(|_| KillerError {
-        detail: "Faild to build the Client",
+        detail: "Faild to build the Client".into(),
     })
 }
 
@@ -171,18 +166,15 @@ pub fn filter_tokens(csrf: &Csrf, text: &str) -> Result<RequestParts, KillerErro
         let matched = re
             .captures(text)
             .ok_or(KillerError {
-                detail: Box::leak(
-                    format!("Don't found a match for the regex of the token: {}", name)
-                        .into_boxed_str(),
-                ),
+                detail: format!("Don't found a match for the regex of the token: {}", name).into(),
             })?
             .iter()
             .last()
             .ok_or(KillerError {
-                detail: "Can not get the last group of the regex",
+                detail: "Can not get the last group of the regex".into(),
             })?
             .ok_or(KillerError {
-                detail: "Can not get the value of the last group of the regex",
+                detail: "Can not get the value of the last group of the regex".into(),
             })?
             .as_str();
 
@@ -209,7 +201,7 @@ pub fn filter_tokens(csrf: &Csrf, text: &str) -> Result<RequestParts, KillerErro
             }
             _ => {
                 return Err(KillerError {
-                    detail: "Invalid token position",
+                    detail: "Invalid token position".into(),
                 })
             }
         };
@@ -220,14 +212,14 @@ pub fn filter_tokens(csrf: &Csrf, text: &str) -> Result<RequestParts, KillerErro
 
 pub async fn get_part_file(field_name: &str, path: &str) -> Result<RequestPart, KillerError> {
     let mut file = File::open(path).await.map_err(|_| KillerError {
-        detail: Box::leak(format!("Error open the file: {}", path).into_boxed_str()),
+        detail: format!("Error open the file: {}", path).into(),
     })?;
     let mut buffer = Vec::new();
     let _ = file
         .read_to_end(&mut buffer)
         .await
         .map_err(|_| KillerError {
-            detail: Box::leak(format!("Error read the file: {}", path).into_boxed_str()),
+            detail: format!("Error read the file: {}", path).into(),
         })?;
     let mime = mime_guess::from_path(path).first_or_text_plain();
 
@@ -250,7 +242,7 @@ pub async fn get_part_file(field_name: &str, path: &str) -> Result<RequestPart, 
 pub async fn log_response(
     response: Result<Response, ErrorEnum>,
     filters: &Filters,
-    payload: String,
+    payload: &String,
     progress: Arc<Progress>,
 ) -> Result<(), KillerError> {
     let no = progress.no_req.fetch_add(1, Relaxed);
